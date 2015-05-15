@@ -1,0 +1,15 @@
+<?php
+
+/**
+ * @file
+ * Install, update and uninstall functions for the etranzact module.
+ */
+
+/**
+ * Implements hook_uninstall().
+ */
+function uc_etranzact_uninstall() {
+  db_delete('variable')
+    ->condition('name', 'uc_etranzact_%', 'LIKE')
+    ->execute();
+}
