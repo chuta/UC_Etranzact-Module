@@ -1,0 +1,249 @@
+<?php
+
+/**
+ * @file
+ * Integrates the eTransact WebConnectplus™ API with Ubercart!
+ *
+ */
+
+define('UC_ETRANZACT_DEMO_POST_URL', 'http://demo.etranzact.com:8080/WebConnectPlus/caller.jsp');
+define('UC_ETRANZACT_LIVE_POST_URL', 'https://www.etranzact.net/WebConnectPlus/caller.jsp');
+define('UC_ETRANZACT_LOGO_URL', 'http://your domain/sites/default/files/yourimagefile.jpg');
+
+/**
+ * Implements hook_menu().
+ */
+function uc_etranzact_menu() {
+  $items = array();
+
+  $items['uc_etranzact/complete'] = array(
+    'title' => 'eTranzact order complete',
+    // 'page callback' => 'your domain/content/order-completed',
+    'page callback' => 'uc_etranzact_complete',
+    'access callback' => TRUE,
+    'access arguments' => array('access content'),
+    'type' => MENU_CALLBACK,
+  );
+
+  return $items;
+}
+
+/**
+ * Finalizes etranzact transaction.
+ */
+function uc_etranzact_complete() {
+  // TODO: Process and format response
+  watchdog('uc_etranzact_response', '<pre>' . print_r($_REQUEST,TRUE) . '<pre>');
+  if ($_REQUEST['SUCCESS'] == 0) {
+    $transId = explode('-', $_REQUEST['TRANSACTION_ID']);
+    $order_id = $transId[0];
+    uc_order_update_status($order_id, 'payment_received');
+    drupal_set_message(t('Payment successful'));
+    drupal_goto('content/order-completed');
+  }
+  else {
+    drupal_set_message(t('Payment unsuccessful'),'error');
+    drupal_goto('<front>');
+  }
+}
+
+/**
+ * Implements hook_uc_payment_method().
+ *
+ */
+function uc_etranzact_uc_payment_method() {
+  $path = base_path() . drupal_get_path('module', 'uc_etranzact');
+  $title = variable_get('uc_etranzact_method_title', t('eTranzact powered card payment:'));
+  $title .= '<br />' . theme('image', array(
+    'path' => drupal_get_path('module', 'uc_etranzact') . '/etranzact.jpg',
+    'attributes' => array('class' => array('uc_etranzact-logo')),
+  ));
+
+  $methods['etranzact'] = array(
+    'id' => 'etranzact_webconnectplus',
+    'name' => t('eTranzact WebConnectplus'),
+    'title' => $title,
+    'review' => t('eTranzact'),
+    'desc' => t('Complete orders through eTranzact WebConnectplus.'),
+    'callback' => 'uc_payment_method_etranzact',
+    'express' => 'uc_etranzact_form',
+    'weight' => 3,
+    'checkout' => FALSE,
+    'no_gateway' => TRUE,
+  );
+
+  return $methods;
+}
+
+/**
+ * Adds etranzact settings to the payment method settings form.
+ *
+ */
+function uc_payment_method_etranzact($op, &$order, $form = NULL, &$form_state = NULL) {
+  switch ($op) {
+    case 'settings':
+      $form['uc_etranzact_tid'] = array(
+        '#type' => 'textfield',
+        '#title' => t('Terminal Id'),
+        '#description' => t('Your 10 digit number assigned by eTranzact.'),
+        '#default_value' => variable_get('uc_etranzact_tid', ''),
+        '#size' => 16,
+      );
+      $form['uc_etranzact_secret_key'] = array(
+        '#type' => 'textfield',
+        '#title' => t('Secret key to encode'),
+        '#description' => t('The Secret key to encode with transaction posts.'),
+        '#default_value' => variable_get('uc_etranzact_secret_key', 'naijarocks'),
+        '#size' => 16,
+      );
+      $form['uc_etranzact_demo'] = array(
+        '#type' => 'checkbox',
+        '#title' => t('Enable demo mode, allowing you to process fake orders for testing purposes.'),
+        '#default_value' => variable_get('uc_etranzact_demo', TRUE),
+      );
+      $form['uc_etranzact_echodata'] = array(
+        '#type' => 'textfield',
+        '#title' => t('Echodata'),
+        '#description' => t('A string that the eTranzact server would echo back for whatever reason.'),
+        '#default_value' => variable_get('uc_etranzact_echodata', 'whatever'),
+        '#size' => 16,
+      );
+      $form['uc_etranzact_description'] = array(
+        '#type' => 'textfield',
+        '#title' => t('Description'),
+        '#description' => t('A description to go with the transactions.'),
+        '#default_value' => variable_get('uc_etranzact_description', t('eTransact card transaction.')),
+      );
+      $form['uc_etranzact_country_code'] = array(
+        '#type' => 'textfield',
+        '#title' => t('Country Code'),
+        '#description' => t('Country Code.'),
+        '#default_value' => variable_get('uc_etranzact_country_code', 'NGN'),
+        '#size' => 16,
+      );
+      return $form;
+  }
+}
+
+/**
+ * Returns the form for Checkout bypass.
+ *
+ */
+function uc_etranzact_form($form, &$form_state) {
+  $form['uc_etranzact'] = array(
+    '#type' => 'image_button',
+    '#button_type' => 'checkout',
+    '#src' => url('http://your domain/sites/default/files/etranzact.jpg', array('absolute' => TRUE)),
+    '#title' => t('Ensure you are logged in, before you proceed!'),
+    '#submit' => array('uc_cart_view_form_submit', 'uc_etranzact_form_submit'),
+  );
+
+  return $form;
+}
+
+/**
+ * Submit handler for uc_etranzact_form().
+ *
+ */
+function uc_etranzact_form_submit($form, &$form_state) {
+  global $user;
+  if ($user->uid == 0) {
+    $current = current_path();
+    $form_state['redirect'] = url("user/login", array('absolute' => TRUE,'query' => array('destination' => $current)));
+  }
+  else {
+    $items = uc_cart_get_contents();
+
+    if (!is_array($items) || count($items) == 0) {
+      drupal_set_message(t('You do not have any items in your shopping cart.'));
+      return;
+    }
+
+    list($desc, $subtotal) = _uc_etranzact_product_details($items);
+
+    $order = uc_order_new($user->uid);
+
+    if (variable_get('uc_etranzact_demo')) {
+
+  	$terminal_id = variable_get('uc_etranzact_tid', '0000000001');
+      $request_url = UC_ETRANZACT_LIVE_POST_URL;
+
+    } else {
+
+  	$terminal_id = '000000012001;
+      $request_url = UC_ETRANZACT_LIVE_POST_URL;
+
+    }
+    $secret = variable_get('uc_etranzact_secret_key', 'DOMISTORE_KEY');
+    $transaction_id = $order->order_id . '-' . strftime('%c');
+    $amount = $subtotal;
+    $response_url = url('uc_etranzact/complete', array('absolute' => TRUE));
+    $cheksum = md5($amount.$terminal_id.$transaction_id.$response_url.$secret);
+
+    $request = array(
+      'TERMINAL_ID' =>  $terminal_id,
+      'TRANSACTION_ID' => $order_id,
+      'RESPONSE_URL' => $response_url,
+      'AMOUNT' => $amount,
+      'DESCRIPTION' => variable_get('uc_etranzact_description', 'eTransact card transaction.'),
+      'ECHODATA' => variable_get('uc_etranzact_echodata', 'naijarocksalways'),
+
+      'CHECKSUM' => $cheksum,
+      'LOGO_URL' => UC_ETRANZACT_LOGO_URL,
+      'TRANS_NUM' => $order->order_id,
+      'EMAIL' => $user->mail,
+      'CURRENCY_CODE' => variable_get('uc_etranzact_country_code', 'NGN'),
+    );
+
+    $order->products = $items;
+    uc_order_save($order);
+
+    $data = '';
+    foreach ($request as $key => $value) {
+      $data .= $key . '=' . urlencode(str_replace(',', '', $value)) . '&';
+    }
+    $data = substr($data, 0, -1);
+
+    $url = "http://your domain/uc_etranzact/complete";
+    $country_code = "USD";
+    $terminalId = "0000000001";
+    $transId = $order->order_id . '-' . strftime('%c');
+    $txAmount = $amount;
+    $description = "payment using etranzact";
+    $secret = "ACBNINT_KEY";
+    $mylogo = "http://your domain.com/sites/default/files/etranzact.jpg";
+    $connect = "https://www.etranzact.net";
+
+    $email = "info@your domain.com";
+    $echoData = "REG:79837478895998";
+
+    $cheksum = md5($txAmount.$terminalId.$transId.$url.$secret);
+    $queryString= "LOGO_URL=".$mylogo."&RESPONSE_URL=".$url."&CURRENCY_CODE=".$country_code."&TERMINAL_ID=".$terminalId."&TRANSACTION_ID=".$transId."&AMOUNT=".$txAmount."&DESCRIPTION=".$description."&ECHODATA=".$echoData."&TRANS_NUM=".$transId."&EMAIL=".$email;
+    header("Location:".$connect."/WebConnectPlus/caller.jsp?".$queryString);
+
+    //header("Location:".$request_url."?".$data);
+
+    exit();
+  }
+}
+
+/**
+ * Returns the description and subtotal of the products on an order.
+ */
+function _uc_etranzact_product_details($items) {
+  $desc = '';
+  $subtotal = 0;
+
+  if (!empty($items)) {
+    foreach ($items as $item) {
+      if (!empty($desc)) {
+        $desc .= ' / ';
+      }
+      $desc .= $item->qty . 'x ' . $item->title;
+      $subtotal += $item->qty * $item->price;
+    }
+  }
+
+  return array($desc, $subtotal);
+}
+
